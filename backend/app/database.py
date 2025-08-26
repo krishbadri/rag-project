@@ -7,16 +7,26 @@ import os
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://rag_user:rag_pass@localhost:5432/rag_db"
+    "sqlite:///./rag_app.db"  # Default to SQLite for development
 )
 
+IS_POSTGRES = DATABASE_URL.startswith("postgresql")
+
 # Create engine
-engine = create_engine(
-    DATABASE_URL,
-    poolclass=StaticPool,
-    pool_pre_ping=True,
-    echo=False  # Set to True for SQL debugging
-)
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        pool_pre_ping=True,
+        echo=False,
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        echo=False,
+    )
 
 # Create session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -35,13 +45,31 @@ def get_db():
 
 
 def init_db():
-    """Initialize database with pgvector extension"""
-    with engine.connect() as conn:
-        # Enable pgvector extension
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        conn.commit()
+    """Initialize database"""
+    try:
+        with engine.connect() as conn:
+            if IS_POSTGRES:
+                try:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                except Exception as e:
+                    print(f"Warning: Could not ensure pgvector extension: {e}")
+    except Exception as e:
+        print(f"Warning: Could not initialize database: {e}")
+        print("This is normal if database is not available")
 
 
 def create_tables():
     """Create all tables"""
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        if IS_POSTGRES:
+            try:
+                # Create IVFFlat index if possible (requires ANALYZE after data grows; safe to attempt)
+                engine.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING ivfflat (embedding vector_l2_ops)"
+                ))
+            except Exception as e:
+                print(f"Warning: Could not create vector index: {e}")
+    except Exception as e:
+        print(f"Warning: Could not create tables: {e}")
+        print("This is normal if database is not available")

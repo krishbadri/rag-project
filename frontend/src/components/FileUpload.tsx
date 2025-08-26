@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import React, { useState, useCallback } from 'react'
 import { Upload, File, X, CheckCircle, AlertCircle } from 'lucide-react'
 
 interface UploadStatus {
@@ -15,26 +15,26 @@ export default function FileUpload() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploads, setUploads] = useState<UploadStatus[]>([])
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setIsDragOver(true)
   }, [])
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setIsDragOver(false)
   }, [])
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setIsDragOver(false)
     
-    const files = Array.from(e.dataTransfer.files)
+    const files = Array.from(e.dataTransfer.files) as File[]
     await uploadFiles(files)
   }, [])
 
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || [])
+    const files = Array.from(e.target.files || []) as File[]
     await uploadFiles(files)
   }, [])
 
@@ -43,7 +43,7 @@ export default function FileUpload() {
       const uploadId = Math.random().toString(36).substr(2, 9)
       
       // Add to uploads list
-      setUploads(prev => [...prev, {
+      setUploads((prev: UploadStatus[]) => [...prev, {
         id: uploadId,
         filename: file.name,
         status: 'uploading',
@@ -70,20 +70,39 @@ export default function FileUpload() {
 
         const { document_id, upload_url, fields } = await initResponse.json()
 
-        // Step 2: Upload to S3/MinIO
-        const formData = new FormData()
-        Object.entries(fields).forEach(([key, value]) => {
-          formData.append(key, value as string)
-        })
-        formData.append('file', file)
+        // Step 2: Upload to storage (direct backend or S3/MinIO)
+        if ((fields as any)?.direct === 'true') {
+          const formData = new FormData()
+          formData.append('document_id', document_id)
+          formData.append('file', file)
 
-        const uploadResponse = await fetch(upload_url, {
-          method: 'POST',
-          body: formData
-        })
+          const directResponse = await fetch(upload_url, {
+            method: 'POST',
+            body: formData,
+          })
+          if (!directResponse.ok) {
+            throw new Error('Failed to upload file (direct)')
+          }
+        } else if ((fields as any)?.mock === 'true') {
+          const mockResponse = await fetch(upload_url, { method: 'POST' })
+          if (!mockResponse.ok) {
+            throw new Error('Failed to upload file (mock)')
+          }
+        } else {
+          const formData = new FormData()
+          Object.entries(fields).forEach(([key, value]) => {
+            formData.append(key, value as string)
+          })
+          formData.append('file', file)
 
-        if (!uploadResponse.ok) {
-          throw new Error('Failed to upload file')
+          const uploadResponse = await fetch(upload_url, {
+            method: 'POST',
+            body: formData
+          })
+
+          if (!uploadResponse.ok) {
+            throw new Error('Failed to upload file')
+          }
         }
 
         // Step 3: Complete upload
@@ -92,7 +111,7 @@ export default function FileUpload() {
         })
 
         // Update status
-        setUploads(prev => prev.map(upload => 
+        setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) => 
           upload.id === uploadId 
             ? { ...upload, status: 'processing', progress: 100 }
             : upload
@@ -101,7 +120,7 @@ export default function FileUpload() {
         // TODO: Poll for job completion
         // For now, mark as completed after a delay
         setTimeout(() => {
-          setUploads(prev => prev.map(upload => 
+          setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) => 
             upload.id === uploadId 
               ? { ...upload, status: 'completed' }
               : upload
@@ -110,7 +129,7 @@ export default function FileUpload() {
 
       } catch (error) {
         console.error('Upload error:', error)
-        setUploads(prev => prev.map(upload => 
+        setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) => 
           upload.id === uploadId 
             ? { ...upload, status: 'error', error: error instanceof Error ? error.message : 'Upload failed' }
             : upload
@@ -120,7 +139,7 @@ export default function FileUpload() {
   }
 
   const removeUpload = (id: string) => {
-    setUploads(prev => prev.filter(upload => upload.id !== id))
+    setUploads((prev: UploadStatus[]) => prev.filter((upload: UploadStatus) => upload.id !== id))
   }
 
   return (
@@ -173,7 +192,7 @@ export default function FileUpload() {
         <div className="mt-8">
           <h3 className="text-lg font-medium text-gray-900 mb-4">Upload Status</h3>
           <div className="space-y-3">
-            {uploads.map((upload) => (
+            {uploads.map((upload: UploadStatus) => (
               <div
                 key={upload.id}
                 className="flex items-center justify-between p-4 bg-white rounded-lg border"

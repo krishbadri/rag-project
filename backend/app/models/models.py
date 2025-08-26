@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Enum, Float, JSON
+import os
+from app.database import IS_POSTGRES
 from sqlalchemy.orm import relationship
-from sqlalchemy.dialects.postgresql import VECTOR
 from sqlalchemy.sql import func
 import enum
 from app.database import Base
@@ -57,7 +58,9 @@ class Chunk(Base):
     content = Column(Text, nullable=False)
     modality = Column(Enum(Modality), nullable=False)
     citation_locator = Column(JSON, nullable=True)  # page number, frame, timestamp, etc.
-    embedding = Column(VECTOR(384), nullable=True)  # Using sentence-transformers default dimension
+    # In SQLite dev mode, store as JSON string; in Postgres, expect pgvector installed and use TEXT as placeholder
+    # Note: Proper pgvector type binding would be ideal; here we keep TEXT for compatibility, and let search handle pgvector path.
+    embedding = Column(Text, nullable=True)
     chunk_index = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

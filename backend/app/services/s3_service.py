@@ -23,28 +23,32 @@ def get_s3_client():
 
 def create_bucket_if_not_exists(bucket_name: str):
     """Create S3 bucket if it doesn't exist"""
-    s3_client = get_s3_client()
-    
     try:
-        s3_client.head_bucket(Bucket=bucket_name)
-    except:
-        # Bucket doesn't exist, create it
-        s3_client.create_bucket(Bucket=bucket_name)
+        s3_client = get_s3_client()
         
-        # If using MinIO, we might need to set bucket policy
-        if os.getenv("S3_ENDPOINT_URL"):
-            bucket_policy = {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Principal": {"AWS": "*"},
-                        "Action": ["s3:GetObject"],
-                        "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
-                    }
-                ]
-            }
-            s3_client.put_bucket_policy(Bucket=bucket_name, Policy=str(bucket_policy))
+        try:
+            s3_client.head_bucket(Bucket=bucket_name)
+        except:
+            # Bucket doesn't exist, create it
+            s3_client.create_bucket(Bucket=bucket_name)
+            
+            # If using MinIO, we might need to set bucket policy
+            if os.getenv("S3_ENDPOINT_URL"):
+                bucket_policy = {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"AWS": "*"},
+                            "Action": ["s3:GetObject"],
+                            "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
+                        }
+                    ]
+                }
+                s3_client.put_bucket_policy(Bucket=bucket_name, Policy=str(bucket_policy))
+    except Exception as e:
+        print(f"Warning: Could not create S3 bucket: {e}")
+        print("This is normal if S3/MinIO is not available")
 
 
 def upload_file(file_path: str, s3_key: str, bucket_name: str = None):

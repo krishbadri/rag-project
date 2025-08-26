@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.models import Chunk, Document
+from app.models.models import Chunk, Document
 from app.services.embedding_service import get_embedding
 
 router = APIRouter()

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import boto3
@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.database import get_db
-from app.models import Document, DocumentStatus
+from app.models.models import Document, DocumentStatus
 from app.services.s3_service import get_s3_client
+from app.services.ingest_service import ingest_document
 
 router = APIRouter()
 
@@ -53,28 +54,53 @@ async def init_upload(
     db.commit()
     db.refresh(document)
     
-    # Generate presigned URL for upload
-    s3_client = get_s3_client()
-    
-    # Create presigned POST URL (allows direct upload to S3/MinIO)
-    presigned_post = s3_client.generate_presigned_post(
-        Bucket=os.getenv("S3_BUCKET", "rag-bucket"),
-        Key=s3_key,
-        Fields={
-            "Content-Type": request.mime_type,
-        },
-        Conditions=[
-            {"Content-Type": request.mime_type},
-            ["content-length-range", 1, request.size_bytes + 1000]  # Allow some buffer
-        ],
-        ExpiresIn=3600  # 1 hour
-    )
-    
+    # For local dev without S3/MinIO, support direct upload via backend
     return UploadInitResponse(
         document_id=document_id,
-        upload_url=presigned_post["url"],
-        fields=presigned_post["fields"]
+        upload_url="/api/uploads/direct",
+        fields={
+            "document_id": document_id,
+            "filename": request.filename,
+            "direct": "true",
+        }
     )
+
+
+@router.post("/mock-upload")
+async def mock_upload():
+    """Mock upload endpoint for testing"""
+    return {"message": "File uploaded successfully (mock)"}
+
+
+@router.post("/direct")
+async def direct_upload(
+    document_id: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Accept file upload directly to the backend for local development."""
+    # Ensure document exists
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Save to local disk
+    import pathlib
+    import shutil
+
+    uploads_root = pathlib.Path("uploaded_files")
+    target_dir = uploads_root / document_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = target_dir / file.filename
+    with target_path.open("wb") as out_file:
+        shutil.copyfileobj(file.file, out_file)
+
+    # Update document record with local path
+    document.s3_key = str(target_path)
+    db.commit()
+
+    return {"message": "File uploaded successfully (direct)", "path": str(target_path)}
 
 
 @router.post("/{document_id}/complete")
@@ -94,8 +120,13 @@ async def complete_upload(
     # Update status to processing
     document.status = DocumentStatus.PROCESSING
     db.commit()
-    
-    # TODO: Enqueue ingestion job
-    # This will be implemented when we add the job queue
-    
-    return {"message": "Upload completed, processing started"}
+
+    # In local non-docker mode, ingest synchronously
+    try:
+        ingest_document(document, db)
+    except Exception as e:
+        document.status = DocumentStatus.FAILED
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
+
+    return {"message": "Upload completed, document ready"}

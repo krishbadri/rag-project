@@ -6,7 +6,7 @@ from typing import List, Optional
 import json
 
 from app.database import get_db
-from app.services.llm_service import generate_answer
+from app.services.llm_service import generate_answer, generate_answer_stream
 from app.services.search_service import search_relevant_chunks
 
 router = APIRouter()
@@ -29,14 +29,10 @@ async def chat_without_streaming(
     db: Session = Depends(get_db)
 ):
     """Chat with LLM (non-streaming version)"""
-    
-    # Search for relevant chunks
-    chunks = await search_relevant_chunks(request.query, request.top_k, db)
-    
-    # Generate answer
+
+    chunks = search_relevant_chunks(request.query, request.top_k, db)
     answer = await generate_answer(request.query, chunks)
-    
-    # Format citations
+
     citations = []
     for chunk in chunks:
         citations.append({
@@ -48,7 +44,7 @@ async def chat_without_streaming(
             },
             "citation_locator": chunk.citation_locator
         })
-    
+
     return ChatResponse(answer=answer, citations=citations)
 
 
@@ -58,12 +54,10 @@ async def chat_with_streaming(
     db: Session = Depends(get_db)
 ):
     """Chat with LLM (streaming version)"""
-    
+
     async def generate_stream():
-        # Search for relevant chunks
-        chunks = await search_relevant_chunks(request.query, request.top_k, db)
-        
-        # Format citations
+        chunks = search_relevant_chunks(request.query, request.top_k, db)
+
         citations = []
         for chunk in chunks:
             citations.append({
@@ -75,17 +69,13 @@ async def chat_with_streaming(
                 },
                 "citation_locator": chunk.citation_locator
             })
-        
-        # Send citations first
         yield f"data: {json.dumps({'type': 'citations', 'citations': citations})}\n\n"
-        
-        # Stream the answer
-        async for token in generate_answer(request.query, chunks, stream=True):
+
+        async for token in generate_answer_stream(request.query, chunks):
             yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
-        
-        # Send end marker
+
         yield f"data: {json.dumps({'type': 'end'})}\n\n"
-    
+
     return StreamingResponse(
         generate_stream(),
         media_type="text/plain",

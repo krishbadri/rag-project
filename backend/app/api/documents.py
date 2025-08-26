@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.database import get_db
-from app.models import Document, DocumentStatus
+from app.models.models import Document, DocumentStatus
 from app.services.s3_service import delete_file
 
 router = APIRouter()

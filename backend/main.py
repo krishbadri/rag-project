@@ -2,15 +2,29 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
+import os
+from dotenv import load_dotenv
 
-from app.database import engine, Base
+from app.database import engine, Base, init_db, create_tables
 from app.api import uploads, documents, jobs, search, chat
+from app.services.s3_service import create_bucket_if_not_exists
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    Base.metadata.create_all(bind=engine)
+    load_dotenv()
+    
+    # Initialize database with pgvector extension
+    init_db()
+    
+    # Create all tables
+    create_tables()
+    
+    # Create S3 bucket if it doesn't exist
+    bucket_name = os.getenv("S3_BUCKET", "rag-bucket")
+    create_bucket_if_not_exists(bucket_name)
+    
     yield
     # Shutdown
     pass
@@ -48,6 +62,11 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/test")
+async def test_endpoint():
+    return {"message": "Backend is working!"}
 
 
 if __name__ == "__main__":
