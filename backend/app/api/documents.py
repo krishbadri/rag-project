@@ -7,6 +7,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models.models import Document, DocumentStatus
 from app.services.s3_service import delete_file
+from app.services.vector_store import rebuild_index
 
 router = APIRouter()
 
@@ -57,7 +58,10 @@ async def delete_document(document_id: str, db: Session = Depends(get_db)):
     # Delete from database (cascade will delete chunks)
     db.delete(document)
     db.commit()
-    
+    try:
+        rebuild_index(db)
+    except Exception:
+        pass
     return {"message": "Document deleted successfully"}
 
 

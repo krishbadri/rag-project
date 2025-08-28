@@ -91,6 +91,38 @@ def load_or_build_index(db: Session) -> None:
         _id_to_chunk_id = ids
 
 
+def rebuild_index(db: Session) -> None:
+    """Rebuild the entire index from DB and persist to disk."""
+    global _index, _id_to_chunk_id, _dim
+    _ensure_dir()
+    vectors, ids = _load_embeddings_from_db(db)
+    if vectors.shape[0] == 0:
+        _index = None
+        _id_to_chunk_id = []
+        _dim = None
+        # Also clear on disk
+        try:
+            if os.path.exists(INDEX_PATH):
+                os.remove(INDEX_PATH)
+            if os.path.exists(META_PATH):
+                os.remove(META_PATH)
+        except Exception:
+            pass
+        return
+
+    _dim = int(vectors.shape[1])
+    if faiss is not None:
+        index = faiss.IndexFlatIP(_dim)
+        vectors = _normalize(vectors)
+        index.add(vectors)
+        _index = index
+        _id_to_chunk_id = ids
+        _save_index()
+    else:
+        _index = vectors  # type: ignore[assignment]
+        _id_to_chunk_id = ids
+
+
 def _save_index() -> None:
     if faiss is None or _index is None or _dim is None:
         return

@@ -30,7 +30,7 @@ async def chat_without_streaming(
 ):
     """Chat with LLM (non-streaming version)"""
 
-    chunks = search_relevant_chunks(request.query, request.top_k, db)
+    chunks = [] if request.top_k <= 0 else search_relevant_chunks(request.query, request.top_k, db)
     answer = await generate_answer(request.query, chunks)
 
     citations = []
@@ -56,7 +56,7 @@ async def chat_with_streaming(
     """Chat with LLM (streaming version)"""
 
     async def generate_stream():
-        chunks = search_relevant_chunks(request.query, request.top_k, db)
+        chunks = [] if request.top_k <= 0 else search_relevant_chunks(request.query, request.top_k, db)
 
         citations = []
         for chunk in chunks:

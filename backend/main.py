@@ -1,19 +1,27 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uvicorn
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 from app.database import engine, Base, init_db, create_tables
 from app.api import uploads, documents, jobs, search, chat
 from app.services.s3_service import create_bucket_if_not_exists
+from app.database import get_db
+from app.services.vector_store import rebuild_index
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    load_dotenv()
+    # Startup: force-load root .env regardless of CWD
+    try:
+        ROOT_ENV = Path(__file__).resolve().parent.parent / ".env"
+        load_dotenv(dotenv_path=ROOT_ENV, override=False)
+    except Exception:
+        # Best-effort only
+        pass
     
     # Initialize database with pgvector extension
     init_db()
@@ -67,6 +75,22 @@ async def health_check():
 @app.get("/test")
 async def test_endpoint():
     return {"message": "Backend is working!"}
+
+
+@app.get("/env-status")
+async def env_status():
+    import os
+    key = os.getenv("OPENAI_API_KEY")
+    return {
+        "has_openai_key": bool(key),
+        "openai_key_prefix": (key[:4] + "***") if key else None,
+    }
+
+
+@app.post("/admin/reindex")
+async def admin_reindex(db = Depends(get_db)):
+    rebuild_index(db)
+    return {"message": "Reindex completed"}
 
 
 if __name__ == "__main__":

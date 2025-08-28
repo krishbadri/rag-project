@@ -25,6 +25,7 @@ export default function ChatInterface() {
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [showRetrieval, setShowRetrieval] = useState(false)
+  const [useRetrieval, setUseRetrieval] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -66,7 +67,7 @@ export default function ChatInterface() {
         },
         body: JSON.stringify({
           query: input,
-          top_k: 5,
+          top_k: useRetrieval ? 5 : 0,
           stream: true
         })
       })
@@ -146,6 +147,12 @@ export default function ChatInterface() {
               {showRetrieval ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               <span>{showRetrieval ? 'Hide' : 'Show'} retrieval</span>
             </button>
+          </div>
+          <div className="mt-2 flex items-center space-x-2 text-sm text-gray-700">
+            <label className="flex items-center space-x-2">
+              <input type="checkbox" checked={useRetrieval} onChange={(e) => setUseRetrieval(e.target.checked)} />
+              <span>Use retrieval (RAG)</span>
+            </label>
           </div>
         </div>
 
