@@ -37,6 +37,7 @@ class Document(Base):
     __tablename__ = "documents"
 
     id = Column(String, primary_key=True, index=True)
+    batch_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
     mime_type = Column(String, nullable=False)
     size_bytes = Column(Integer, nullable=False)
@@ -48,6 +49,14 @@ class Document(Base):
     # Relationships
     chunks = relationship("Chunk", back_populates="document", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="document", cascade="all, delete-orphan")
+
+
+class Batch(Base):
+    __tablename__ = "batches"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class Chunk(Base):

@@ -62,6 +62,19 @@ def create_tables():
     """Create all tables"""
     try:
         Base.metadata.create_all(bind=engine)
+        # Ensure new columns added post-initialization exist (idempotent)
+        try:
+            with engine.connect() as conn:
+                if DATABASE_URL.startswith("sqlite"):
+                    # Check if batch_id exists on documents
+                    res = conn.execute(text("PRAGMA table_info(documents)")).fetchall()
+                    cols = {row[1] for row in res}  # name is 2nd column
+                    if "batch_id" not in cols:
+                        conn.execute(text("ALTER TABLE documents ADD COLUMN batch_id VARCHAR"))
+                else:
+                    conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS batch_id VARCHAR"))
+        except Exception as e:
+            print(f"Warning: Could not ensure batch_id column: {e}")
         if IS_POSTGRES:
             try:
                 # Create IVFFlat index if possible (requires ANALYZE after data grows; safe to attempt)

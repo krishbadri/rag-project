@@ -26,6 +26,10 @@ export default function ChatInterface() {
   const [isLoading, setIsLoading] = useState(false)
   const [showRetrieval, setShowRetrieval] = useState(false)
   const [useRetrieval, setUseRetrieval] = useState(true)
+  const [limitToBatch, setLimitToBatch] = useState(true)
+  const [batchDocIds, setBatchDocIds] = useState<string[]>([])
+  const [batchId, setBatchId] = useState<string | null>(null)
+  const [pinnedBatch, setPinnedBatch] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -35,6 +39,58 @@ export default function ChatInterface() {
   useEffect(() => {
     scrollToBottom()
   }, [messages])
+
+  // Load current batch and optional query param batch_id
+  useEffect(() => {
+    try {
+      // If query has batch_id, prefer it and pin
+      const url = new URL(window.location.href)
+      const qBatch = url.searchParams.get('batch_id')
+      if (qBatch) {
+        setBatchId(qBatch)
+        setPinnedBatch(true)
+        localStorage.setItem('current_batch_id', qBatch)
+        // Fetch its docs for display
+        fetch(`/api/uploads/batches/${qBatch}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (data && Array.isArray(data.documents)) {
+              const ids = data.documents.map((d: any) => d.id)
+              setBatchDocIds(ids)
+              localStorage.setItem('current_batch_document_ids', JSON.stringify(ids))
+            }
+          })
+          .catch(() => {})
+      }
+
+      const keyNew = 'current_batch_document_ids'
+      const rawNew = typeof window !== 'undefined' ? localStorage.getItem(keyNew) : null
+      let ids: string[] = rawNew ? JSON.parse(rawNew) : []
+      // Fallback to old key
+      if (!ids?.length) {
+        const keyOld = 'recent_document_ids'
+        const rawOld = typeof window !== 'undefined' ? localStorage.getItem(keyOld) : null
+        ids = rawOld ? JSON.parse(rawOld) : []
+      }
+      setBatchDocIds(ids)
+      const rawBatchId = typeof window !== 'undefined' ? localStorage.getItem('current_batch_id') : null
+      if (rawBatchId) setBatchId(rawBatchId)
+      const onStorage = (e: StorageEvent) => {
+        if (pinnedBatch) return
+        if (e.key === keyNew) {
+          const next: string[] = e.newValue ? JSON.parse(e.newValue) : []
+          setBatchDocIds(next)
+        }
+        if (e.key === 'current_batch_id') {
+          setBatchId(e.newValue)
+        }
+      }
+      window.addEventListener('storage', onStorage)
+      return () => window.removeEventListener('storage', onStorage)
+    } catch (e) {
+      // ignore
+    }
+  }, [pinnedBatch])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,6 +116,18 @@ export default function ChatInterface() {
       setMessages(prev => [...prev, assistantMessage])
 
       // Stream the response
+      // Refresh batch IDs right before sending (storage event doesn't fire in same tab)
+      try {
+        const raw = typeof window !== 'undefined' ? localStorage.getItem('current_batch_document_ids') : null
+        if (raw) {
+          const ids: string[] = JSON.parse(raw)
+          if (Array.isArray(ids)) setBatchDocIds(ids)
+        }
+        const rawId = typeof window !== 'undefined' ? localStorage.getItem('current_batch_id') : null
+        if (rawId && !pinnedBatch) setBatchId(rawId)
+      } catch {}
+
+      const useTopK = useRetrieval && (!limitToBatch || batchDocIds.length > 0) ? 5 : 0
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: {
@@ -67,8 +135,12 @@ export default function ChatInterface() {
         },
         body: JSON.stringify({
           query: input,
-          top_k: useRetrieval ? 5 : 0,
-          stream: true
+          top_k: useTopK,
+          stream: true,
+          // Prefer server-enforced batch scoping
+          batch_id: limitToBatch ? batchId : undefined,
+          // Keep document_ids for fallback visibility, but server will prefer batch_id
+          document_ids: limitToBatch ? batchDocIds : undefined,
         })
       })
 
@@ -153,6 +225,50 @@ export default function ChatInterface() {
               <input type="checkbox" checked={useRetrieval} onChange={(e) => setUseRetrieval(e.target.checked)} />
               <span>Use retrieval (RAG)</span>
             </label>
+            <label className="flex items-center space-x-2">
+              <input type="checkbox" checked={limitToBatch} onChange={(e) => setLimitToBatch(e.target.checked)} />
+              <span>Limit to current upload batch</span>
+            </label>
+            {limitToBatch && (
+              <span className="text-xs text-gray-500">Batch {batchId ? batchId.slice(0,6) : '—'} • {batchDocIds.length} doc(s)</span>
+            )}
+            <label className="flex items-center space-x-2">
+              <input type="checkbox" checked={pinnedBatch} onChange={(e) => setPinnedBatch(e.target.checked)} />
+              <span>Pin batch</span>
+            </label>
+            <button
+              onClick={async () => {
+                try {
+                  const resp = await fetch('/api/uploads/batches', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
+                  if (resp.ok) {
+                    const data = await resp.json()
+                    const id = data.id as string
+                    setBatchId(id)
+                    setBatchDocIds([])
+                    setPinnedBatch(false)
+                    localStorage.setItem('current_batch_id', id)
+                    localStorage.setItem('current_batch_document_ids', JSON.stringify([]))
+                  }
+                } catch {}
+              }}
+              className="text-blue-600 hover:text-blue-800"
+            >
+              New Batch
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const url = new URL(window.location.href)
+                  if (batchId) {
+                    url.searchParams.set('batch_id', batchId)
+                  }
+                  await navigator.clipboard.writeText(url.toString())
+                } catch {}
+              }}
+              className="text-gray-600 hover:text-gray-900"
+            >
+              Copy Batch Link
+            </button>
           </div>
         </div>
 
@@ -179,17 +295,34 @@ export default function ChatInterface() {
                   
                   {/* Citations */}
                   {message.type === 'assistant' && message.citations && showRetrieval && (
-                    <div className="mt-3 pt-3 border-t border-gray-200">
-                      <p className="text-xs font-medium text-gray-600 mb-2">Sources:</p>
-                      <div className="space-y-2">
+                    <div className="mt-4 pt-3 border-t border-gray-200">
+                      <div className="flex items-center space-x-2 mb-3">
+                        <FileText className="h-4 w-4 text-gray-500" />
+                        <p className="text-sm font-medium text-gray-700">Sources</p>
+                      </div>
+                      <div className="space-y-3">
                         {message.citations.map((citation, index) => (
-                          <div key={index} className="text-xs bg-white p-2 rounded border">
-                            <p className="font-medium text-gray-900">
-                              {citation.document.name}
-                            </p>
-                            <p className="text-gray-600 truncate">
-                              {citation.content}
-                            </p>
+                          <div key={index} className="bg-blue-50 border border-blue-200 rounded-lg p-3 hover:bg-blue-100 transition-colors">
+                            <div className="flex items-start space-x-3">
+                              <div className="flex-shrink-0">
+                                <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                                  <FileText className="h-4 w-4 text-white" />
+                                </div>
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-gray-900 truncate">
+                                  {citation.document.name}
+                                </p>
+                                <p className="text-sm text-gray-700 mt-1 line-clamp-3">
+                                  {citation.content}
+                                </p>
+                                {citation.citation_locator && (
+                                  <p className="text-xs text-blue-600 mt-1">
+                                    Page {citation.citation_locator.page || 'N/A'}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         ))}
                       </div>

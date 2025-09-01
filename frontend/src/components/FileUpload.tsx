@@ -9,11 +9,21 @@ interface UploadStatus {
   status: 'uploading' | 'processing' | 'completed' | 'error'
   progress: number
   error?: string
+  documentId?: string
 }
 
 export default function FileUpload() {
   const [isDragOver, setIsDragOver] = useState(false)
   const [uploads, setUploads] = useState<UploadStatus[]>([])
+  const [startNewBatch, setStartNewBatch] = useState(false)
+  const [currentBatchId, setCurrentBatchId] = useState<string | null>(null)
+
+  React.useEffect(() => {
+    try {
+      const id = typeof window !== 'undefined' ? localStorage.getItem('current_batch_id') : null
+      if (id) setCurrentBatchId(id)
+    } catch {}
+  }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -39,6 +49,39 @@ export default function FileUpload() {
   }, [])
 
   const uploadFiles = async (files: File[]) => {
+    // Decide batch ID: reuse existing unless user opts to start new
+    let batchId = ''
+    try {
+      const existing = typeof window !== 'undefined' ? localStorage.getItem('current_batch_id') : null
+      if (existing && !startNewBatch) {
+        batchId = existing
+      } else {
+        const resp = await fetch('/api/uploads/batches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })
+        if (resp.ok) {
+          const data = await resp.json()
+          batchId = data.id
+        } else {
+          batchId = Math.random().toString(36).slice(2)
+        }
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('current_batch_id', batchId)
+          localStorage.setItem('current_batch_document_ids', JSON.stringify([]))
+          localStorage.setItem('recent_document_ids', JSON.stringify([]))
+        }
+      }
+      setCurrentBatchId(batchId)
+    } catch {
+      // Fallback
+      batchId = Math.random().toString(36).slice(2)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('current_batch_id', batchId)
+      }
+      setCurrentBatchId(batchId)
+    }
     for (const file of files) {
       const uploadId = Math.random().toString(36).substr(2, 9)
       
@@ -60,7 +103,8 @@ export default function FileUpload() {
           body: JSON.stringify({
             filename: file.name,
             mime_type: file.type,
-            size_bytes: file.size
+            size_bytes: file.size,
+            batch_id: batchId,
           })
         })
 
@@ -111,11 +155,30 @@ export default function FileUpload() {
         })
 
         // Update status
-        setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) => 
-          upload.id === uploadId 
-            ? { ...upload, status: 'processing', progress: 100 }
+        setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) =>
+          upload.id === uploadId
+            ? { ...upload, status: 'processing', progress: 100, documentId: document_id }
             : upload
         ))
+
+        // Record current batch document IDs locally for scoping chat retrieval
+        try {
+          const keyNew = 'current_batch_document_ids'
+          const existingRawNew = typeof window !== 'undefined' ? localStorage.getItem(keyNew) : null
+          const existingNew: string[] = existingRawNew ? JSON.parse(existingRawNew) : []
+          const nextNew = Array.from(new Set([...existingNew, document_id]))
+          localStorage.setItem(keyNew, JSON.stringify(nextNew))
+
+          // Maintain the older key for compatibility with older chat components
+          const keyOld = 'recent_document_ids'
+          const existingRawOld = typeof window !== 'undefined' ? localStorage.getItem(keyOld) : null
+          const existingOld: string[] = existingRawOld ? JSON.parse(existingRawOld) : []
+          const nextOld = Array.from(new Set([...existingOld, document_id]))
+          localStorage.setItem(keyOld, JSON.stringify(nextOld))
+        } catch (e) {
+          // non-fatal
+          console.warn('Could not persist recent document id', e)
+        }
 
         // TODO: Poll for job completion
         // For now, mark as completed after a delay
@@ -127,7 +190,7 @@ export default function FileUpload() {
           ))
         }, 3000)
 
-      } catch (error) {
+        } catch (error) {
         console.error('Upload error:', error)
         setUploads((prev: UploadStatus[]) => prev.map((upload: UploadStatus) => 
           upload.id === uploadId 
@@ -171,6 +234,14 @@ export default function FileUpload() {
         <p className="text-sm text-gray-500 mb-4">
           Supports PDF, PNG, JPG, MP4 files up to 100MB
         </p>
+        <div className="flex items-center justify-center space-x-3 mb-3 text-sm text-gray-700">
+          <label className="flex items-center space-x-2">
+            <input type="checkbox" checked={startNewBatch} onChange={(e) => setStartNewBatch(e.target.checked)} />
+            <span>Start a new batch for this selection</span>
+          </label>
+          <span className="text-gray-400">•</span>
+          <span>Current batch: {currentBatchId ? currentBatchId.slice(0,6) : 'none'}</span>
+        </div>
         <input
           type="file"
           multiple

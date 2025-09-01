@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.database import get_db
-from app.models.models import Document, DocumentStatus
+from app.models.models import Document, DocumentStatus, Batch
 from app.services.s3_service import get_s3_client
 from app.services.ingest_service import ingest_document
 
@@ -19,12 +19,33 @@ class UploadInitRequest(BaseModel):
     filename: str
     mime_type: str
     size_bytes: int
+    batch_id: Optional[str] = None
 
 
 class UploadInitResponse(BaseModel):
     document_id: str
     upload_url: str
     fields: dict
+
+
+class BatchCreateRequest(BaseModel):
+    name: Optional[str] = None
+
+
+class BatchResponse(BaseModel):
+    id: str
+    name: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BatchWithDocumentsResponse(BaseModel):
+    id: str
+    name: Optional[str]
+    created_at: datetime
+    documents: list
 
 
 @router.post("/init", response_model=UploadInitResponse)
@@ -37,12 +58,19 @@ async def init_upload(
     # Generate unique document ID
     document_id = str(uuid.uuid4())
     
+    # Validate batch if provided
+    if request.batch_id:
+        batch = db.query(Batch).filter(Batch.id == request.batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=400, detail="Invalid batch_id")
+
     # Create S3 key
     s3_key = f"uploads/{document_id}/{request.filename}"
     
     # Create document record
     document = Document(
         id=document_id,
+        batch_id=request.batch_id,
         name=request.filename,
         mime_type=request.mime_type,
         size_bytes=request.size_bytes,
@@ -130,3 +158,42 @@ async def complete_upload(
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
 
     return {"message": "Upload completed, document ready"}
+
+
+@router.post("/batches", response_model=BatchResponse)
+async def create_batch(
+    request: BatchCreateRequest = BatchCreateRequest(),
+    db: Session = Depends(get_db)
+):
+    """Create a new upload batch and return its ID."""
+    batch_id = str(uuid.uuid4())
+    batch = Batch(id=batch_id, name=request.name)
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return batch
+
+
+@router.get("/batches/{batch_id}", response_model=BatchWithDocumentsResponse)
+async def get_batch(batch_id: str, db: Session = Depends(get_db)):
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    docs = db.query(Document).filter(Document.batch_id == batch_id).order_by(Document.created_at.asc()).all()
+    documents = [
+        {
+            "id": d.id,
+            "name": d.name,
+            "mime_type": d.mime_type,
+            "size_bytes": d.size_bytes,
+            "status": d.status.value if hasattr(d.status, 'value') else str(d.status),
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in docs
+    ]
+    return {
+        "id": batch.id,
+        "name": batch.name,
+        "created_at": batch.created_at,
+        "documents": documents,
+    }
